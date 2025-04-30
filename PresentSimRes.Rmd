@@ -1,0 +1,276 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+nmeth <- length(unique(res$results$Method))
+shapevals <-c(15, 17, 18, 3, 4, 8, 7, 10 )[1:nmeth]
+
+```
+
+
+
+```{r}
+
+res$truth%>%
+  mutate(A = case_when(
+    
+    A == "0" ~ "ATNT",
+    A == "1" ~ "ATT",
+    TRUE ~ "ATE"
+    
+  ))%>%
+  pivot_wider(names_from = A, values_from = Eff)%>%pander(caption = sprintf("True effects as calculated using counterfactual results in a dataset with %s observations per arm", Nlarge))
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+
+res$results%>%
+  group_by(Method, Time)%>%summarise(Mean_Est = mean(Est),
+                               SD_Est = sd(Est))%>%
+  filter(Method != "Standardization")%>%
+  mutate(Est = sprintf("%s (%s)", round(Mean_Est,2), round(SD_Est,2)))%>%
+  select(Method, Time, Est)%>%
+  pivot_wider(names_from = Time, values_from = Est, names_prefix = "Time ")%>%
+  pander(caption = sprintf("Mean estimates for the different approaches based on %s simulations with %s patients in each simulation",
+                           Nsim,
+                           2*Narm) )
+
+```
+
+
+```{r}
+
+truth <- res$truth%>%
+  mutate(Type = case_when(
+    
+    A == "0" ~ "atnt",
+    A == "1" ~ "att",
+    TRUE ~ "ate"
+    
+  ))%>%mutate(Time = time)
+
+
+
+res$results%>%left_join(truth%>%filter(Type == "att"))%>%
+  group_by(Method, Time)%>%
+  summarise(Bias = mean(Est - Eff),
+            SD = sd(Est),
+            MSE = mean( (Est - Eff)^2))%>%
+  select(-MSE)%>%
+  mutate(res = sprintf("B. %s / sd %s", round(Bias,2), round(SD,2)))%>%
+  
+  select(Method, Time, res)%>%
+  pivot_wider(names_from = Time, values_from = res, names_prefix = "Time ")%>%
+  pander(caption = sprintf("Bias and SD for the different approaches based on %s simulations with %s patients in each arm. ATT was targeted",
+                           Nsim,
+                           Narm ), 
+         split.table = Inf)
+
+```
+
+
+```{r, message=FALSE, warning=FALSE, fig.height= 12}
+
+res$results%>%ggplot(aes(x = Est))+
+  geom_histogram()+
+  facet_grid(Method ~ Time)+
+  geom_vline(data = truth%>%filter(Type == "att")%>%mutate(Time = time), mapping = aes(xintercept = Eff), color = "red")+
+  theme_bw()
+
+```
+
+```{r, message=FALSE, warning=FALSE, fig.height= 5}
+
+res$results%>%
+  group_by(Method, Time)%>%summarise(Est = mean(Est))%>%
+  left_join(truth%>%filter(Type == "att")%>%mutate(Time = time))%>%
+ggplot(aes(x = Eff, y = Est, color = factor(Time), shape = Method))+
+  geom_point()+
+  geom_abline(intercept = 0, slope = 1)+
+  theme_bw()+
+  scale_shape_manual(values = shapevals)
+
+```
+
+```{r}
+
+part1 <- res$results%>%
+  group_by(Method, Time)%>%summarise(Est = mean(Est))
+part2 <- truth%>%filter(Type == "att")%>%mutate(Time = time)
+
+timestep <- ifelse(max(part2$Time) > 5, 2, 1)
+
+
+part2%>%
+ggplot(aes(x = Time))+
+  geom_point(aes(y = Eff), size = 0.5)+
+  geom_line(aes(y = Eff))+
+  geom_point(data = part1, mapping = aes(y = Est, shape = Method))+
+  theme_bw()+
+  scale_x_continuous(breaks = seq(0,max(part2$Time), timestep))+
+  ylab("Effect")+
+  theme(legend.position = "bottom")+
+  scale_shape_manual(values = shapevals)
+
+```
+
+
+```{r}
+
+res$dflarge%>%
+  group_by(time, A)%>%
+  summarise(Observed = mean(X[!is.na(Yobs)]),
+            Alive = mean(X[!Death]))%>%
+  pivot_longer(Observed:Alive)%>%
+  mutate(A = ifelse(A == 0, "Treat 0", "Treat 1"))%>%
+  ggplot(aes(time, value, linetype = name))+
+  geom_line()+
+  facet_wrap(~ A)+
+  theme_bw()+
+  theme(legend.position = "bottom", legend.title = element_blank())+
+  xlab("Time")+
+  ylab("Mean X within observed / alive")+
+  scale_x_continuous(breaks = seq(0,max(part2$Time), timestep))
+
+```
+
+
+```{r}
+
+plotexpfun <- function(fsimlist, width = 0.01){
+  
+  temp <- expand_grid(
+    expand.grid(A = c(0,1),
+              X = c(-1,0,1))%>%
+    mutate(ID = row_number()),
+  time = 1:fsimlist$tmeas)
+    
+temp$c_ps <- as.numeric(model.matrix(fsimlist$c_form, temp)[,-1]%*%fsimlist$c_coef)
+temp$d_ps <- as.numeric(model.matrix(fsimlist$d_form, temp)[,-1]%*%fsimlist$d_coef)
+
+temp$y <- as.numeric(model.matrix(fsimlist$y_form, temp)%*%c(0,fsimlist$y_coef))
+
+temp$chaz <- exp(temp$c_ps)*fsimlist$c_basehaz
+temp$dhaz <- exp(temp$d_ps)*fsimlist$d_basehaz
+
+
+
+plottemp <- expand_grid(time = seq(0,fsimlist$tmeas, by = width),
+                        temp%>%filter(time == 1)%>%select(-time, -y))%>%mutate(C = exp(-chaz*time),
+                                       D = exp(-dhaz*time))%>%left_join(temp%>%select(ID, time, y))
+
+cplot <- ggplot(plottemp,  aes(time, C, color = factor(X)))+
+  geom_line()+
+  facet_wrap(~ A,labeller = labeller( .cols = label_both))+
+  theme_bw()+
+  ggtitle("Censoring - ignoring death")+
+  ylim(c(0,1))
+
+dplot <- ggplot(plottemp,  aes(time, D, color = factor(X)))+
+  geom_line()+
+  facet_wrap(~ A,labeller = labeller( .cols = label_both))+
+  theme_bw()+
+  ggtitle("Death - ignoring censoring")+
+  ylim(c(0,1))
+
+yplot <- ggplot(plottemp, aes(time, y, color = factor(X)))+
+  geom_point()+
+  facet_wrap(~ A,labeller = labeller( .cols = label_both))+
+  theme_bw()+
+  ylab("X-conditional QoL while alive")
+
+ cowplot::plot_grid(yplot, dplot, cplot, ncol = 1)
+  
+}
+
+
+
+```
+
+
+```{r, fig.height=12}
+
+plotexpfun(simlist)
+```
+
+
+
+```{r, eval=FALSE}
+
+sittabfun <- function(fsimlist, width = 0.01){
+  #browser()
+  expit <- function(x){ exp(x)/(1+exp(x))}
+  logit <- function(x){ log(x/(1-x))}
+  
+  temp <- expand.grid(A = c(0,1),
+              X = c(0,1))
+  
+pa0x1 <- expit(fsimlist$a_x_coef[1])
+pa1x1 <- expit(sum(fsimlist$a_x_coef))
+
+temp <- temp%>%mutate(PropBase = case_when(
+  
+  A == 1 & X == 1 ~ pa1x1,
+  A == 1 & X == 0 ~ 1-pa1x1,
+  A == 0 & X == 1 ~ pa0x1,
+  A == 0 & X == 0 ~ 1-pa0x1
+),
+PropBaseTarget = case_when(
+  
+   X == 1 ~ pa1x1,
+   X == 0 ~ 1-pa1x1,
+
+))
+    
+temp$c_ps <- model.matrix(fsimlist$c_form, temp)[,-1]%*%fsimlist$c_coef
+temp$d_ps <- model.matrix(fsimlist$d_form, temp)[,-1]%*%fsimlist$d_coef
+
+temp$y <- as.numeric(model.matrix(fsimlist$y_form, temp)%*%c(0,fsimlist$y_coef))
+
+temp$chaz <- exp(temp$c_ps)*fsimlist$c_basehaz
+temp$dhaz <- exp(temp$d_ps)*fsimlist$d_basehaz
+
+
+tab <- temp%>%mutate(haztot = chaz + dhaz,
+                     Pobs = as.numeric(exp(-haztot)),
+                     Pcensind = (chaz)*(1-Pobs)/haztot,
+                     Pdeathind = (dhaz)*(1-Pobs)/haztot, 
+                     Palive = as.numeric(exp(-dhaz)))%>%
+  group_by(A)%>%
+  mutate(PropObs = PropBase*Pobs/sum(PropBase*Pobs),
+         PropAlive = PropBase*Palive/sum(PropBase*Palive))%>%
+  select(A, X, y,PropBase, PropBaseTarget, PropObs, PropAlive, Pobs, Palive)%>%
+  group_by(A)%>%
+  mutate(y_avg_obs = sum(PropBase*Pobs*y)/sum(PropBase*Pobs),
+         #y_avg_obs_test = sum(PropObs*y),
+         y_avg_alive = sum(PropBase*Palive*y)/sum(PropBase*Palive),
+         #y_avg_alive_test = sum(PropAlive*y),
+         y_avg_target_alive = sum(PropBaseTarget*Palive*y)/sum(PropBaseTarget*Palive)
+         )%>%arrange(A)%>%
+  mutate(y_avg_obs = ifelse(row_number() == 1, y_avg_obs, NaN),
+         y_avg_alive = ifelse(row_number() == 1, y_avg_alive, NaN),
+         y_avg_target_alive = ifelse(row_number() == 1, y_avg_target_alive, NaN))
+
+tab
+
+}
+
+
+
+```
+
+
+```{r, eval=FALSE}
+pander(sittabfun(simlist)%>%select(-Pobs, -Palive), split.table = Inf, missing = "", digits = 3,
+       caption = "PropBase: proportion within A at baseline \n
+                  PropBaseTarget: proportion at baseline in target population \n
+                  PropObs: proportion among observed within A \n
+                  PropObs: porpotion among alive within A (in reality unknonw due to censoring)")
+
+```
+

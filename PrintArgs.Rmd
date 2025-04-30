@@ -1,0 +1,21 @@
+  + $N =$ `r printsimlist$N `
+  + $X \sim U(-1,1)$
+  + Exposure: 
+       
+     - $\mathrm{logit}P(A|X)$ = `r sprintf("%s", printsimlist$a_present)`
+     
+  + Outcome:
+  
+     - $E(Y|X)$ = `r sprintf("%s", printsimlist$y_present)`
+     
+  + Censoring:
+  
+     - model: `r sprintf("P(C > t | X, A) %s",paste(as.character(printsimlist$c_form), collapse = " "))`
+     - $\lambda_{C0}=$ `r printsimlist$c_basehaz`
+     - $e^{\gamma_{C}}=$ `r sprintf("%s", printsimlist$c_present)` 
+     
+  + Death:
+  
+     - model: `r sprintf("P(T > t | X, A) %s",paste(as.character(printsimlist$d_form), collapse = " "))`
+     - $\lambda_D=$ `r printsimlist$d_basehaz`
+     - $e^{\gamma_D}=$ `r sprintf("%s", printsimlist$d_present)` 
