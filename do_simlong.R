@@ -1,3 +1,4 @@
+library(furrr)
 # separate list for the 'large N truth'
 largelist <- simlist
 largelist$N <- Nlarge
@@ -9,8 +10,12 @@ dflarge <- do.call(simfun, largelist)
 # extract true treatment effects from large N-dataset
 # (both counterfactuals are simulated)
 
-truth <- 1:max(dflarge$time)%>%
+truth <- 0:max(dflarge$time)%>%
   map_df( ~ realeff(dflarge%>%filter(time == .x))%>%mutate(time = .x))
+
+
+saveRDS(truth, "truthseparate.rds")
+saveRDS(dflarge, "dflargesep.rds")
 
 # simulate the datasets
 dfs <- 1:Nsim%>%map(function(isim){
@@ -23,55 +28,56 @@ dfs <- 1:Nsim%>%map(function(isim){
   
 })
 
+plan(multisession)
+Ns <- nbrOfWorkers()
+Ns
+plan(multisession, workers = Ns - 2)
+nbrOfWorkers()
 
 # analyse the datasets
-results <- dfs%>%map_df(function(fdf){
-  print(unique(fdf$simnum))
-  unique(fdf$time)%>%
-    map_df(
-      # each timepoint separately
-      ~ analysis_singletp(fdf = fdf,
-                        tmeas = .x)
-                        
-                        
-      )%>%
-    bind_rows(
-      
+results <- dfs%>%future_map_dfr(function(fdf){
+  
+    #fdf <- dfs[[x]]
+    # bad idea to have dfs within this function: is then transfered at each session!!
+    print(unique(fdf$simnr))
+    x <- unique(fdf$simnr)
       # longitudinal - categorical time - three way interaction for iee
-      analysis_long(fdf, tmeas = 1:max(fdf$time),
-                   regres_par = list(stand_form = ~ X,
-                                                c_form = ~X,
-                                                y_form = ~ A*(X + ctime), # X and time interact with A - correct model
-                                                surv_form = ~X) )%>%mutate(Time = as.numeric(Time))%>%
-        mutate(Method = ifelse(Method != "IEE-IPTCW", "IEE-Reg-Int-Full", Method))
+    tempres <- analysis_long(fdf, tmeas = 0:max(fdf$time),
+                    regres_par = list(stand_form = ~ X, # separately per A, so essentially ...*A
+                                      c_form = ~X, # here too, essentially ...*A
+                                      y_form = ~ A*(ctime+X),
+                                      surv_form = ~X), # and here as well!!
+                    robust = TRUE, browse = FALSE,
+                    nboot = Nboot)%>%mutate(Time = as.numeric(Time))%>%
+        mutate(Setting = "Baseline Censoring Fitted only")%>%
+        bind_rows(
+      
+      # longitudinal - categorical time - only two-way interactions with treatment
+      analysis_long(fdf, tmeas = 0:max(fdf$time),
+                    regres_par = list(stand_form = ~ X,
+                                      c_form = ~  X+Y,
+                                      y_form = ~ A*(ctime + X), 
+                                      surv_form = ~X), robust = TRUE,
+                    nboot = Nboot )%>%mutate(Time = as.numeric(Time))%>%
+      mutate(Setting = "TV censoring fitted")
       
     )%>%bind_rows(
       
-      # longitudinal - categorical time - only two-way interactions with treatment
-      analysis_long(fdf, tmeas = 1:max(fdf$time),
+          
+      analysis_long(fdf, tmeas = 0:max(fdf$time),
                     regres_par = list(stand_form = ~ X,
-                                      c_form = ~ X,
-                                      y_form = ~ X + A*ctime, # No X*A interaction
-                                      surv_form = ~X) )%>%mutate(Time = as.numeric(Time))%>%
-        filter(Method != "IEE-IPTCW")%>% #IPTCW already in previous calc
-        mutate(Method = "IEE-Reg-Int-Partial")
+                                      c_form = ~ X + Y,
+                                      y_form = ~ X + A*(ctime), 
+                                      surv_form = ~X), robust = TRUE,
+                    nboot = Nboot )%>%mutate(Time = as.numeric(Time))%>%
+        mutate(Setting = "Wrong Y-model")
+      
       
     )
+    
+    saveRDS(tempres, glue::glue("tempres{x}.rds"))
 
-})
-
-
-
-
-out <- list(dflarge = dflarge,
-            truth = truth,
-            dfs = dfs,
-            results = results,
-            sim = sim_id)
+},  .options = furrr_options(seed = 102030))
 
 
-saveRDS(out, sprintf("Sim_%s.rds", sim_id))
-
-rm(largelist, dflarge, truth, dfs, results, out )
-
-
+rm(largelist, dflarge, truth, dfs, results)
