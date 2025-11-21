@@ -42,7 +42,7 @@ library(kableExtra)
 
 
 
-source("Supp_SimFunctions2.R")
+source("SimFunctions.R")
 ```
 
 ```{r}
@@ -101,7 +101,7 @@ saveRDS(simlist, sprintf("SimSettings_%s.rds", sim_id))
 ```
 
 
-```{r child = 'PrintArgs3.Rmd'}
+```{r child = 'PrintArgs.Rmd'}
 
 ```
 
@@ -357,6 +357,7 @@ toplot%>%left_join(truth%>%filter(Type == "att"))%>%
   kable_styling(font_size = 7)
 
 ```
+
 
 
 
