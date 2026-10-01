@@ -117,7 +117,7 @@ tocalc <- ! (file.exists( resfile ) | (length(sepresfiles) == Nsim))
 
 ```{r dosim, eval = tocalc, include=FALSE, message=FALSE}
 
-source("Supp_do_simlong.R")
+source("do_simlong.R")
 
 ```
 
